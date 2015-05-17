@@ -148,20 +148,32 @@ int nsjail_map_ids(long pid, nsjail_conf_t *config) {
 
 	if (config == NULL || config->id_map == NULL) {
 		ERROR("ID mapping configuration was not specified");
-		return -1;
+		return ERR_CONFIG_NOT_INITIALISED;
 	}
 
 	DEBUG("Mapping ids");
 
-	snprintf(map_path, PATH_MAX, "/proc/%ld/uid_map", pid);
+	(void) snprintf(map_path, PATH_MAX, "/proc/%ld/uid_map", pid);
 	fd = open(map_path, O_RDWR);
+
+	if (fd == -1) {
+		ERROR("Could not open UID map for writing");
+		return -1;
+	}
+
 	write(fd, config->id_map, strlen(config->id_map));
 	close(fd);
 
 	DEBUG("UID mapped");
 
-	snprintf(map_path, PATH_MAX, "/proc/%ld/gid_map", pid);
+	(void) snprintf(map_path, PATH_MAX, "/proc/%ld/gid_map", pid);
 	fd = open(map_path, O_RDWR);
+
+	if (fd == -1) {
+		ERROR("Could not open GID map for writing");
+		return -1;
+	}
+
 	write(fd, config->id_map, strlen(config->id_map));
 	close(fd);
 
@@ -174,11 +186,11 @@ int nsjail_map_ids(long pid, nsjail_conf_t *config) {
  * Waits on a config-provided pipe for a message (or more likely, for closing the pipe)
  */
 int nsjail_wait_signal(nsjail_conf_t *config) {
-	char ch;
-
 	if (config == NULL) {
 		return ERR_CONFIG_NOT_INITIALISED;
 	}
+
+	char ch;
 
 	DEBUG("Waiting for signal");
 
@@ -196,6 +208,11 @@ int nsjail_wait_signal(nsjail_conf_t *config) {
  * Sends a signal to the waiting process signalling that it shouldn't wait anymore
  */
 int nsjail_send_signal(nsjail_conf_t *config) {
+	if (config == NULL) {
+		ERROR("Invalid configuration");
+		return ERR_CONFIG_NOT_INITIALISED;
+	}
+
 	DEBUG("Sending signal");
 	if (close(config->pipe_fd[1]) == -1) {
 		return -1;
@@ -204,6 +221,9 @@ int nsjail_send_signal(nsjail_conf_t *config) {
 	return 0;
 }
 
+/**
+ * Prepares the jailed process by setting it's namespaces, UID's, etc.
+ */
 int nsjail_enter_environment(nsjail_conf_t *config) {
 	int flags = CLONE_NEWPID | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWNS | CLONE_NEWNET | CLONE_NEWUSER | SIGCHLD;
 
@@ -213,6 +233,11 @@ int nsjail_enter_environment(nsjail_conf_t *config) {
 	}
 
 	config->child_pid = clone(nsjail_child, child_stack + STACK_SIZE, flags, (void *) config);
+
+	if (config->child_pid == -1) {
+		ERROR("Could not clone process, aborting");
+		return -1;
+	}
 
 	if (nsjail_map_ids((long) config->child_pid, config) == -1) {
 		ERROR("Error mapping UID/GIDs");
@@ -241,9 +266,19 @@ int nsjail_automount(nsjail_conf_t *config) {
 	return 0;
 }
 
+/**
+ * Disables as many of the root capabilities this process possesses as possible.
+ *
+ * Currently, this is done by switching UID and GID to a safe (overflow) GID/UID
+ */
 void nsjail_lose_dignity() {
-	setuid(DEFAULT_OVERFLOWUID);
-	setgid(DEFAULT_OVERFLOWGID);
+	if (setuid(DEFAULT_OVERFLOWUID) == -1) {
+		ERROR("Couldn't set safe parent UID");
+	}
+	
+	if (setgid(DEFAULT_OVERFLOWGID) == -1) {
+		ERROR("Couldn't set safe parent GID");
+	}
 }
 
 int main(int argc, char **argv) {

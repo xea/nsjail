@@ -15,9 +15,9 @@
 #include <sys/utsname.h>
 #include <sys/wait.h>
 
-#define DEBUG(dbgmessage) 		printf("DEBUG: %s\n", dbgmessage)
-#define ERROR(errmessage) 		printf("ERROR: %s\n", errmessage)
-#define INFO(infomessage) 		printf("INFO: %s\n", infomessage)
+#define DEBUG(dbgmessage) 		(void) printf("DEBUG: %s\n", dbgmessage)
+#define ERROR(errmessage) 		(void) printf("ERROR: %s\n", errmessage)
+#define INFO(infomessage) 		(void) printf("INFO: %s\n", infomessage)
 
 #define ERR_NO_EXECUTABLE NULL
 #define ERR_AUTOMOUNT_FAILED -1
