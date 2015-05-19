@@ -10,6 +10,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <linux/limits.h>
+#include <sys/capability.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
@@ -31,8 +33,6 @@
 #define DEFAULT_OVERFLOWUID 65534
 #define DEFAULT_OVERFLOWGID 65534
 
-#define DEFAULT_CONTAINER_ROOT "/var/lib/libvirt/filesystems/vsandbox"
-
 #define STACK_SIZE (1024 * 1024)
 
 static char child_stack[STACK_SIZE];
@@ -41,7 +41,8 @@ typedef struct nsjail_automount_entry {
 	char *type;
 	char *source;
 	char *target;
-	char *options;
+	unsigned long options;
+	char *data;
 } nsjail_automount_entry_t;
 
 typedef struct nsjail_conf {
@@ -55,6 +56,8 @@ typedef struct nsjail_conf {
 	int verbosity;
 	pid_t child_pid;
 	int pipe_fd[2];
+	int disable_namespaces;
+	int disable_automounts;
 } nsjail_conf_t;
 
 nsjail_conf_t * nsjail_default_config();
@@ -64,8 +67,11 @@ int nsjail_wait_signal(nsjail_conf_t *config);
 int nsjail_send_signal(nsjail_conf_t *config);
 int nsjail_map_ids(long pid, nsjail_conf_t *config);
 int nsjail_enter_environment(nsjail_conf_t *config);
+int nsjail_drop_capabilities();
 void nsjail_destroy_config(nsjail_conf_t *config);
 int nsjail_automount(nsjail_conf_t *config);
 void nsjail_lose_dignity();
+
+void print_capabilities(pid_t pid);
 
 #endif // NSJAIL_H

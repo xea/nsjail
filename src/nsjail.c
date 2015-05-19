@@ -10,19 +10,14 @@
 nsjail_conf_t * nsjail_default_config() {
 	DEBUG("Initialising NSJail configuration");
 
-	/*char * config_data[][4] = {
-		{ "proc", "none", "/proc", NULL },
-		{ "sysfs", "none", "/sys", NULL }
-	};*/
-
 	nsjail_conf_t * config = (nsjail_conf_t *) calloc(1, sizeof(nsjail_conf_t));
 
-	// TODO this value should not be set to a fix number, this is just for testing purposes
 	if (config == NULL) {
 		ERROR("Initialising configuration has failed");
 		return NULL;
 	}
 
+	// TODO this should be replaced with a dynamic configuration but at this point it will suffice
 	config->automount_count = 2;
 	config->automounts = (nsjail_automount_entry_t *) calloc(config->automount_count, sizeof(nsjail_automount_entry_t));
 
@@ -34,21 +29,23 @@ nsjail_conf_t * nsjail_default_config() {
 	config->automounts[0].type = "proc";
 	config->automounts[0].source = "none";
 	config->automounts[0].target = "/proc";
-	config->automounts[0].options = NULL;
+	config->automounts[0].options = MS_NOEXEC;
 
 	config->automounts[1].type = "sysfs";
 	config->automounts[1].source = "none";
 	config->automounts[1].target = "/sys";
-	config->automounts[1].options = NULL;
+	config->automounts[1].options = MS_NOEXEC;
 
 	// initialise the remaining variables
 
-	config->container_root = DEFAULT_CONTAINER_ROOT;
+	config->container_root = NULL;
 	config->hostname = NULL;
 	config->exec_cmd = NULL;
 	config->exec_argv = NULL;
 	config->id_map = NULL;
 	config->verbosity = 0;
+	config->disable_namespaces = 0;
+	config->disable_automounts = 0;
 
 	return config;
 }
@@ -70,16 +67,23 @@ void nsjail_destroy_config(nsjail_conf_t *config) {
 nsjail_conf_t * nsjail_parse_config(int argc, char **argv) {
 	nsjail_conf_t *config = nsjail_default_config();
 
+	if (config == NULL) {
+		ERROR("Couldn't parse configuration :<");
+		return NULL;
+	}
+
 
 	// used as a temporary storage of command line arguments
 	int opt;
 
-	while ((opt = getopt(argc, argv, "+vh:r:m:")) != -1) {
+	while ((opt = getopt(argc, argv, "+NMvh:r:m:")) != -1) {
 		switch (opt) {
 		case 'r': config->container_root = optarg; break;
 		case 'v': config->verbosity = 1; break;
 		case 'h': config->hostname = optarg; break;
 		case 'm': config->id_map = optarg; break;
+		case 'N': config->disable_namespaces = 1; break;
+		case 'M': config->disable_automounts = 1; break;
 		}
 	}
 
@@ -133,6 +137,21 @@ static int nsjail_child(void *arg) {
 		}
 	}
 
+	if (config->container_root == NULL) {
+		ERROR("Container root directory is not specified");
+		return -1;
+	}
+
+	if (!config->disable_automounts && nsjail_automount(config) == -1) {
+		ERROR("Auto-mounting filesystems failed");
+		return -1;
+	}
+
+	if (chroot(config->container_root) == -1) {
+		ERROR("Couldn't chroot to container root");
+		return -1;
+	}
+	nsjail_drop_capabilities();
 
 	if (execvp(config->exec_cmd, config->exec_argv) == -1) {
 		ERROR("Error during executing the program");
@@ -225,7 +244,11 @@ int nsjail_send_signal(nsjail_conf_t *config) {
  * Prepares the jailed process by setting it's namespaces, UID's, etc.
  */
 int nsjail_enter_environment(nsjail_conf_t *config) {
-	int flags = CLONE_NEWPID | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWNS | CLONE_NEWNET | CLONE_NEWUSER | SIGCHLD;
+	int flags = SIGCHLD;
+
+	if (!config->disable_namespaces) {
+		flags = flags | CLONE_NEWPID | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWNS | CLONE_NEWNET | CLONE_NEWUSER;
+	}
 
 	if (pipe(config->pipe_fd) == -1) {
 		ERROR("Error creating pipe");
@@ -239,12 +262,15 @@ int nsjail_enter_environment(nsjail_conf_t *config) {
 		return -1;
 	}
 
+
 	if (nsjail_map_ids((long) config->child_pid, config) == -1) {
 		ERROR("Error mapping UID/GIDs");
 		return -1;
 	}
 
 	nsjail_send_signal(config);
+
+	nsjail_lose_dignity();
 
 	if (waitpid(config->child_pid, NULL, 0) == -1) {
 		ERROR("Error while waiting for child");
@@ -257,8 +283,21 @@ int nsjail_enter_environment(nsjail_conf_t *config) {
 int nsjail_automount(nsjail_conf_t *config) {
 	if (config != NULL) {
 		for (int i = 0; i < config->automount_count; i++) {
-			if (config->verbosity > 0) {
-				printf("Mounting %s\n", config->automounts[i].target);
+			nsjail_automount_entry_t *mp = &config->automounts[i];
+
+			// 4096 character long maximum allowed path seems reasonably long
+			// TODO here should be a calculated path length anyway
+			char *relative_mp = (char *) calloc(4096, sizeof(char));
+			if (snprintf(relative_mp, 4096, "%s%s", config->container_root, mp->target) == -1) {
+				ERROR("Couldn't generate automount path");
+			} else {
+				if (config->verbosity > 0) {
+					printf("Mounting type %s %s to %s\n", mp->type, mp->source, relative_mp);
+				}
+
+				if (mount(mp->source, relative_mp, mp->type, mp->options, (void *) NULL) == -1) {
+					ERROR("Mount fail");
+				}
 			}
 		}
 	}
@@ -281,6 +320,14 @@ void nsjail_lose_dignity() {
 	}
 }
 
+int nsjail_drop_capabilities() {
+	return 0;
+}
+
+void print_capabilities(pid_t pid) {
+	printf("eUID: %ld; eGID: %ld; UID: %ld, GID: %ld, capabilities: %s\n", (long) geteuid(), (long)getegid(), (long) getuid(), (long) getgid(), cap_to_text(cap_get_pid(pid), NULL));
+}
+
 int main(int argc, char **argv) {
 	nsjail_conf_t *config = nsjail_parse_config(argc, argv); 
 
@@ -289,17 +336,11 @@ int main(int argc, char **argv) {
 		return EXIT_FAILURE;
 	}
 
-	if (nsjail_automount(config) == ERR_AUTOMOUNT_FAILED) {
-		ERROR("Failed to automount filesystems");
-		return EXIT_FAILURE;
-	}
-
 	if (nsjail_enter_environment(config) == ERR_ENVIRONMENT_FAILED) {
 		ERROR("Failed to enter chrooted environment");
 		return EXIT_FAILURE;
 	}
 
-	nsjail_lose_dignity();
 	nsjail_destroy_config(config);
 
 	return EXIT_SUCCESS;
