@@ -311,12 +311,12 @@ int nsjail_automount(nsjail_conf_t *config) {
  * Currently, this is done by switching UID and GID to a safe (overflow) GID/UID
  */
 void nsjail_lose_dignity() {
-	if (setuid(DEFAULT_OVERFLOWUID) == -1) {
-		ERROR("Couldn't set safe parent UID");
-	}
-	
 	if (setgid(DEFAULT_OVERFLOWGID) == -1) {
 		ERROR("Couldn't set safe parent GID");
+	}
+
+	if (setuid(DEFAULT_OVERFLOWUID) == -1) {
+		ERROR("Couldn't set safe parent UID");
 	}
 }
 
