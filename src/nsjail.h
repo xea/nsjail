@@ -55,6 +55,8 @@ typedef struct nsjail_conf {
 	char **exec_argv;
 	char *hostname;
 	char *id_map;
+	uid_t initial_uid;
+	uid_t initial_gid;
 	int verbosity;
 	pid_t child_pid;
 	int pipe_fd[2];

@@ -43,6 +43,8 @@ nsjail_conf_t * nsjail_default_config() {
 	config->exec_cmd = NULL;
 	config->exec_argv = NULL;
 	config->id_map = NULL;
+	config->initial_uid = 0;
+	config->initial_gid = 0;
 	config->verbosity = 0;
 	config->disable_namespaces = 0;
 	config->disable_automounts = 0;
@@ -78,12 +80,14 @@ nsjail_conf_t * nsjail_parse_config(int argc, char **argv) {
 	// used as a temporary storage of command line arguments
 	int opt;
 
-	while ((opt = getopt(argc, argv, "+NMvh:r:m:")) != -1) {
+	while ((opt = getopt(argc, argv, "+NMvh:r:m:u:g:")) != -1) {
 		switch (opt) {
 		case 'r': config->container_root = optarg; break;
 		case 'v': config->verbosity = 1; break;
 		case 'h': config->hostname = optarg; break;
 		case 'm': config->id_map = optarg; break;
+		case 'u': config->initial_uid = atoi(optarg); break;
+		case 'g': config->initial_gid = atoi(optarg); break;
 		case 'N': config->disable_namespaces = 1; break;
 		case 'M': config->disable_automounts = 1; break;
 		}
@@ -116,16 +120,18 @@ static int nsjail_child(void *arg) {
 		return -1;
 	}
 
-	if (setuid(UID_ROOT) == -1) {
-		errsv = errno;
-		syslog(LOG_ERR, "Couldn't set UID of child process: %s", strerror(errsv));
-		return -1;
-	}
+	if (config->id_map != NULL) {
+		if (setuid(config->initial_uid) == -1) {
+			errsv = errno;
+			syslog(LOG_ERR, "Couldn't set UID of child process: %s", strerror(errsv));
+			return -1;
+		}
 
-	if (setgid(GID_ROOT) == -1) {
-		errsv = errno;
-		syslog(LOG_ERR, "Couldn't set GID of child process: %s", strerror(errsv));
-		return -1;
+		if (setgid(config->initial_gid) == -1) {
+			errsv = errno;
+			syslog(LOG_ERR, "Couldn't set GID of child process: %s", strerror(errsv));
+			return -1;
+		}
 	}
 
 	if (config->hostname != NULL) {
@@ -149,8 +155,7 @@ static int nsjail_child(void *arg) {
 	}
 
 	if (config->container_root == NULL) {
-		syslog(LOG_ERR, "Container root directory is not specified");
-		return -1;
+		syslog(LOG_INFO, "Container root directory is not specified");
 	}
 
 	if (!config->disable_automounts && nsjail_automount(config) == -1) {
@@ -158,7 +163,7 @@ static int nsjail_child(void *arg) {
 		return -1;
 	}
 
-	if (chroot(config->container_root) == -1) {
+	if (config->container_root != NULL && chroot(config->container_root) == -1) {
 		syslog(LOG_ERR, "Couldn't chroot to container root");
 		return -1;
 	}
@@ -272,7 +277,7 @@ int nsjail_enter_environment(nsjail_conf_t *config) {
 	}
 
 
-	if (nsjail_map_ids((long) config->child_pid, config) == -1) {
+	if (config->id_map != NULL && nsjail_map_ids((long) config->child_pid, config) == -1) {
 		syslog(LOG_ERR, "Error mapping UID/GIDs");
 		return -1;
 	}
