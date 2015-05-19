@@ -8,21 +8,21 @@
  * This method always returns a newly allocated nsjail_conf_t struct.
  */
 nsjail_conf_t * nsjail_default_config() {
-	DEBUG("Initialising NSJail configuration");
-
 	nsjail_conf_t * config = (nsjail_conf_t *) calloc(1, sizeof(nsjail_conf_t));
+	int errsv = errno;
 
 	if (config == NULL) {
-		ERROR("Initialising configuration has failed");
+		syslog(LOG_ERR, "Could not allocate memory for run-time configuration: %s\n", strerror(errsv));
 		return NULL;
 	}
 
 	// TODO this should be replaced with a dynamic configuration but at this point it will suffice
 	config->automount_count = 2;
 	config->automounts = (nsjail_automount_entry_t *) calloc(config->automount_count, sizeof(nsjail_automount_entry_t));
+	errsv = errno;
 
 	if (config->automounts == NULL) {
-		ERROR("Allocating memory for the configuration has failed");
+		syslog(LOG_ERR, "Could not allocate memory for filesystem automounts: %s\n", strerror(errsv));
 		return NULL;
 	}
 
@@ -57,6 +57,9 @@ void nsjail_destroy_config(nsjail_conf_t *config) {
 	if (config != NULL) {
 		free(config->automounts);
 		free(config);
+		syslog(LOG_DEBUG, "Run-time configuration has been freed");
+	} else {
+		syslog(LOG_WARNING, "Requested destroying of NULL configuration");
 	}
 }
 
@@ -68,10 +71,9 @@ nsjail_conf_t * nsjail_parse_config(int argc, char **argv) {
 	nsjail_conf_t *config = nsjail_default_config();
 
 	if (config == NULL) {
-		ERROR("Couldn't parse configuration :<");
+		syslog(LOG_ERR, "Tried to parse NULL configuration");
 		return NULL;
 	}
-
 
 	// used as a temporary storage of command line arguments
 	int opt;
@@ -90,6 +92,10 @@ nsjail_conf_t * nsjail_parse_config(int argc, char **argv) {
 	config->exec_cmd = argv[optind];
 	config->exec_argv = &argv[optind];
 
+	if (config->exec_cmd == NULL) {
+		syslog(LOG_WARNING, "No executable argument was provided");
+	}
+
 	return config;
 }
 
@@ -98,24 +104,27 @@ nsjail_conf_t * nsjail_parse_config(int argc, char **argv) {
  */
 static int nsjail_child(void *arg) {
 	nsjail_conf_t *config = (nsjail_conf_t *) arg;
+	int errsv = 0;
 
 	if (nsjail_wait_signal(config) == -1) {
-		ERROR("Wait for child signal failed");
+		syslog(LOG_ERR, "Wait for child signal failed");
 		return -1;
 	}
 
 	if (config->exec_cmd == NULL) {
-		ERROR("No command was specified");
+		syslog(LOG_ERR, "No command was specified");
 		return -1;
 	}
 
 	if (setuid(UID_ROOT) == -1) {
-		ERROR("SetUID fail");
+		errsv = errno;
+		syslog(LOG_ERR, "Couldn't set UID of child process: %s", strerror(errsv));
 		return -1;
 	}
 
 	if (setgid(GID_ROOT) == -1) {
-		ERROR("SetGID fail");
+		errsv = errno;
+		syslog(LOG_ERR, "Couldn't set GID of child process: %s", strerror(errsv));
 		return -1;
 	}
 
@@ -123,12 +132,14 @@ static int nsjail_child(void *arg) {
 		struct utsname uts;
 
 		if (sethostname(config->hostname, strlen(config->hostname)) == -1) {
-			ERROR("Error during setting hostname");
+			errsv = errno;
+			syslog(LOG_ERR, "Couldn't set container hostname: %s", strerror(errsv));
 			return -1;
 		}
 
 		if (uname(&uts) == -1) {
-			ERROR("Error during getting hostname");
+			errsv = errno;
+			syslog(LOG_ERR, "Couldn't get container hostname: %s", strerror(errsv));
 			return -1;
 		}
 		
@@ -138,23 +149,24 @@ static int nsjail_child(void *arg) {
 	}
 
 	if (config->container_root == NULL) {
-		ERROR("Container root directory is not specified");
+		syslog(LOG_ERR, "Container root directory is not specified");
 		return -1;
 	}
 
 	if (!config->disable_automounts && nsjail_automount(config) == -1) {
-		ERROR("Auto-mounting filesystems failed");
+		syslog(LOG_ERR, "Auto-mounting filesystems failed");
 		return -1;
 	}
 
 	if (chroot(config->container_root) == -1) {
-		ERROR("Couldn't chroot to container root");
+		syslog(LOG_ERR, "Couldn't chroot to container root");
 		return -1;
 	}
+
 	nsjail_drop_capabilities();
 
 	if (execvp(config->exec_cmd, config->exec_argv) == -1) {
-		ERROR("Error during executing the program");
+		syslog(LOG_ERR, "Error during executing the program");
 		return -1;
 	}
 
@@ -166,37 +178,33 @@ int nsjail_map_ids(long pid, nsjail_conf_t *config) {
 	int fd;
 
 	if (config == NULL || config->id_map == NULL) {
-		ERROR("ID mapping configuration was not specified");
+		syslog(LOG_ERR, "ID mapping configuration was not specified");
 		return ERR_CONFIG_NOT_INITIALISED;
 	}
 
-	DEBUG("Mapping ids");
+	syslog(LOG_DEBUG, "Mapping ids");
 
 	(void) snprintf(map_path, PATH_MAX, "/proc/%ld/uid_map", pid);
 	fd = open(map_path, O_RDWR);
 
 	if (fd == -1) {
-		ERROR("Could not open UID map for writing");
+		syslog(LOG_ERR, "Could not open UID map for writing");
 		return -1;
 	}
 
 	write(fd, config->id_map, strlen(config->id_map));
 	close(fd);
-
-	DEBUG("UID mapped");
 
 	(void) snprintf(map_path, PATH_MAX, "/proc/%ld/gid_map", pid);
 	fd = open(map_path, O_RDWR);
 
 	if (fd == -1) {
-		ERROR("Could not open GID map for writing");
+		syslog(LOG_ERR, "Could not open GID map for writing");
 		return -1;
 	}
 
 	write(fd, config->id_map, strlen(config->id_map));
 	close(fd);
-
-	DEBUG("GID mapped");
 
 	return 0;
 }
@@ -211,12 +219,12 @@ int nsjail_wait_signal(nsjail_conf_t *config) {
 
 	char ch;
 
-	DEBUG("Waiting for signal");
+	syslog(LOG_DEBUG, "Waiting for signal");
 
 	close(config->pipe_fd[1]);
 
 	if (read(config->pipe_fd[0], &ch, 1) != 0) {
-		ERROR("Error during waiting for pipe");
+		syslog(LOG_ERR, "Error during waiting for pipe");
 		return -1;
 	}
 
@@ -228,11 +236,12 @@ int nsjail_wait_signal(nsjail_conf_t *config) {
  */
 int nsjail_send_signal(nsjail_conf_t *config) {
 	if (config == NULL) {
-		ERROR("Invalid configuration");
+		syslog(LOG_ERR, "Invalid configuration");
 		return ERR_CONFIG_NOT_INITIALISED;
 	}
 
-	DEBUG("Sending signal");
+	syslog(LOG_DEBUG, "Sending signal");
+
 	if (close(config->pipe_fd[1]) == -1) {
 		return -1;
 	}
@@ -251,20 +260,20 @@ int nsjail_enter_environment(nsjail_conf_t *config) {
 	}
 
 	if (pipe(config->pipe_fd) == -1) {
-		ERROR("Error creating pipe");
+		syslog(LOG_ERR, "Error creating pipe");
 		return -1;
 	}
 
 	config->child_pid = clone(nsjail_child, child_stack + STACK_SIZE, flags, (void *) config);
 
 	if (config->child_pid == -1) {
-		ERROR("Could not clone process, aborting");
+		syslog(LOG_ERR, "Could not clone process, aborting");
 		return -1;
 	}
 
 
 	if (nsjail_map_ids((long) config->child_pid, config) == -1) {
-		ERROR("Error mapping UID/GIDs");
+		syslog(LOG_ERR, "Error mapping UID/GIDs");
 		return -1;
 	}
 
@@ -273,7 +282,7 @@ int nsjail_enter_environment(nsjail_conf_t *config) {
 	nsjail_lose_dignity();
 
 	if (waitpid(config->child_pid, NULL, 0) == -1) {
-		ERROR("Error while waiting for child");
+		syslog(LOG_ERR, "Error while waiting for child");
 		return -1;
 	}
 
@@ -289,14 +298,14 @@ int nsjail_automount(nsjail_conf_t *config) {
 			// TODO here should be a calculated path length anyway
 			char *relative_mp = (char *) calloc(4096, sizeof(char));
 			if (snprintf(relative_mp, 4096, "%s%s", config->container_root, mp->target) == -1) {
-				ERROR("Couldn't generate automount path");
+				syslog(LOG_ERR, "Couldn't generate automount path");
 			} else {
 				if (config->verbosity > 0) {
 					printf("Mounting type %s %s to %s\n", mp->type, mp->source, relative_mp);
 				}
 
 				if (mount(mp->source, relative_mp, mp->type, mp->options, (void *) NULL) == -1) {
-					ERROR("Mount fail");
+					syslog(LOG_ERR, "Mount fail");
 				}
 			}
 		}
@@ -312,11 +321,11 @@ int nsjail_automount(nsjail_conf_t *config) {
  */
 void nsjail_lose_dignity() {
 	if (setgid(DEFAULT_OVERFLOWGID) == -1) {
-		ERROR("Couldn't set safe parent GID");
+		syslog(LOG_ERR, "Couldn't set safe parent GID");
 	}
 
 	if (setuid(DEFAULT_OVERFLOWUID) == -1) {
-		ERROR("Couldn't set safe parent UID");
+		syslog(LOG_ERR, "Couldn't set safe parent UID");
 	}
 }
 
@@ -329,19 +338,25 @@ void print_capabilities(pid_t pid) {
 }
 
 int main(int argc, char **argv) {
+	openlog(NULL, LOG_PID, LOG_USER);
+
+	syslog(LOG_DEBUG, "NSJail starting up");
+
 	nsjail_conf_t *config = nsjail_parse_config(argc, argv); 
 
 	if (config->exec_cmd == ERR_NO_EXECUTABLE) {
-		ERROR("No executable was specified");
+		syslog(LOG_ERR, "No executable was specified");
 		return EXIT_FAILURE;
 	}
 
 	if (nsjail_enter_environment(config) == ERR_ENVIRONMENT_FAILED) {
-		ERROR("Failed to enter chrooted environment");
+		syslog(LOG_ERR, "Failed to enter chrooted environment");
 		return EXIT_FAILURE;
 	}
 
 	nsjail_destroy_config(config);
+
+	closelog();
 
 	return EXIT_SUCCESS;
 }
