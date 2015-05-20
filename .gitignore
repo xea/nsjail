@@ -33,6 +33,7 @@
 
 # application binary
 nsjail
+nsjaild
 
 # Vim temp files
 *.swp
