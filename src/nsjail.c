@@ -43,8 +43,8 @@ nsjail_conf_t * nsjail_default_config() {
 	config->exec_cmd = NULL;
 	config->exec_argv = NULL;
 	config->id_map = NULL;
-	config->initial_uid = 0;
-	config->initial_gid = 0;
+	config->initial_uid = UID_ROOT;
+	config->initial_gid = GID_ROOT;
 	config->verbosity = 0;
 	config->disable_namespaces = 0;
 	config->disable_automounts = 0;
@@ -86,6 +86,7 @@ nsjail_conf_t * nsjail_parse_config(int argc, char **argv) {
 		case 'v': config->verbosity = 1; break;
 		case 'h': config->hostname = optarg; break;
 		case 'm': config->id_map = optarg; break;
+			  // TODO use a better string conversion function than atoi
 		case 'u': config->initial_uid = atoi(optarg); break;
 		case 'g': config->initial_gid = atoi(optarg); break;
 		case 'N': config->disable_namespaces = 1; break;
