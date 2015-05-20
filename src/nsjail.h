@@ -62,6 +62,7 @@ typedef struct nsjail_conf {
 	int pipe_fd[2];
 	int disable_namespaces;
 	int disable_automounts;
+	char *config_source;
 } nsjail_conf_t;
 
 nsjail_conf_t * nsjail_default_config();

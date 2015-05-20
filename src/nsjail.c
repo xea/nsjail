@@ -48,6 +48,7 @@ nsjail_conf_t * nsjail_default_config() {
 	config->verbosity = 0;
 	config->disable_namespaces = 0;
 	config->disable_automounts = 0;
+	config->config_source = NULL;
 
 	return config;
 }
@@ -80,7 +81,7 @@ nsjail_conf_t * nsjail_parse_config(int argc, char **argv) {
 	// used as a temporary storage of command line arguments
 	int opt;
 
-	while ((opt = getopt(argc, argv, "+NMvh:r:m:u:g:")) != -1) {
+	while ((opt = getopt(argc, argv, "+NMvh:r:m:u:g:f:")) != -1) {
 		switch (opt) {
 		case 'r': config->container_root = optarg; break;
 		case 'v': config->verbosity = 1; break;
@@ -91,6 +92,7 @@ nsjail_conf_t * nsjail_parse_config(int argc, char **argv) {
 		case 'g': config->initial_gid = atoi(optarg); break;
 		case 'N': config->disable_namespaces = 1; break;
 		case 'M': config->disable_automounts = 1; break;
+		case 'f': config->config_source = optarg; break;
 		}
 	}
 
@@ -344,7 +346,7 @@ void print_capabilities(pid_t pid) {
 }
 
 int main(int argc, char **argv) {
-	openlog(NULL, LOG_PID, LOG_USER);
+	openlog(NULL, LOG_PID | LOG_PERROR, LOG_USER);
 
 	syslog(LOG_DEBUG, "NSJail starting up");
 
