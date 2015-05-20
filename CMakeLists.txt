@@ -10,3 +10,4 @@ target_link_libraries (nsjail LINK_PUBLIC cap)
 target_link_libraries (nsjaild LINK_PUBLIC cap config)
 
 install (TARGETS nsjail DESTINATION bin)
+install (TARGETS nsjaild DESTINATION sbin)
