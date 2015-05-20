@@ -174,7 +174,8 @@ static int nsjail_child(void *arg) {
 	nsjail_drop_capabilities();
 
 	if (execvp(config->exec_cmd, config->exec_argv) == -1) {
-		syslog(LOG_ERR, "Error during executing the program");
+		errsv = errno;
+		syslog(LOG_ERR, "Error during executing the program: %s", strerror(errsv));
 		return -1;
 	}
 
@@ -262,20 +263,23 @@ int nsjail_send_signal(nsjail_conf_t *config) {
  */
 int nsjail_enter_environment(nsjail_conf_t *config) {
 	int flags = SIGCHLD;
+	int errsv = 0;
 
 	if (!config->disable_namespaces) {
 		flags = flags | CLONE_NEWPID | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWNS | CLONE_NEWNET | CLONE_NEWUSER;
 	}
 
 	if (pipe(config->pipe_fd) == -1) {
-		syslog(LOG_ERR, "Error creating pipe");
+		errsv = errno;
+		syslog(LOG_ERR, "Error creating pipe: %s", strerror(errsv));
 		return -1;
 	}
 
 	config->child_pid = clone(nsjail_child, child_stack + STACK_SIZE, flags, (void *) config);
+	errsv = errno;
 
 	if (config->child_pid == -1) {
-		syslog(LOG_ERR, "Could not clone process, aborting");
+		syslog(LOG_ERR, "Could not clone process, aborting: %s", strerror(errsv));
 		return -1;
 	}
 
