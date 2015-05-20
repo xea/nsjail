@@ -298,6 +298,7 @@ int nsjail_enter_environment(nsjail_conf_t *config) {
 }
 
 int nsjail_automount(nsjail_conf_t *config) {
+	int errsv = 0;
 	if (config != NULL) {
 		for (int i = 0; i < config->automount_count; i++) {
 			nsjail_automount_entry_t *mp = &config->automounts[i];
@@ -313,7 +314,8 @@ int nsjail_automount(nsjail_conf_t *config) {
 				}
 
 				if (mount(mp->source, relative_mp, mp->type, mp->options, (void *) NULL) == -1) {
-					syslog(LOG_ERR, "Mount fail");
+					errsv = errno;
+					syslog(LOG_ERR, "Mount fail: %s", strerror(errsv));
 				}
 			}
 		}
