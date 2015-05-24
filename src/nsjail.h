@@ -11,72 +11,96 @@
 #include <string.h>
 #include <syslog.h>
 #include <unistd.h>
-#include <linux/limits.h>
 #include <sys/capability.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
+#include <linux/limits.h>
 
-#define DEBUG(dbgmessage) 		(void) printf("DEBUG: %s\n", dbgmessage)
-#define ERROR(errmessage) 		(void) printf("ERROR: %s\n", errmessage)
-#define INFO(infomessage) 		(void) printf("INFO: %s\n", infomessage)
+#include <libconfig.h>
 
-#define ERR_NO_EXECUTABLE NULL
-#define ERR_AUTOMOUNT_FAILED -1
-#define ERR_ENVIRONMENT_FAILED -1
-#define ERR_CONFIG_NOT_INITIALISED -1
+#ifndef TRUE
+#define TRUE 1
+#endif 
 
-#define UID_ROOT 0
-#define GID_ROOT 0
+#ifndef FALSE
+#define FALSE 0
+#endif
 
-// These are also defined in linux/highuid.h
-#define DEFAULT_OVERFLOWUID 65534
-#define DEFAULT_OVERFLOWGID 65534
+#ifndef NS_ERROR
+#define NS_ERROR -1
+#endif
+
+#define NS_REQUEST_UNKNOWN     -1
+#define NS_REQUEST_START 	0
+#define NS_REQUEST_STOP 	1
+#define NS_REQUEST_INFO 	2
+#define NS_REQUEST_KILL 	3
+#define NS_REQUEST_HELP 	4
+#define NS_REQUEST_EXECUTE      5
+
+#define NS_DEFAULT_CONFIG_PATH 		"/etc/nsjail/nsjail.conf"
 
 #define STACK_SIZE (1024 * 1024)
 
 static char child_stack[STACK_SIZE];
 
-typedef struct nsjail_automount_entry {
-	char *type;
-	char *source;
-	char *target;
-	unsigned long options;
-	char *data;
-} nsjail_automount_entry_t;
+typedef struct ns_user_opts {
+	int request;
+	char *selection;
+	char *config_path;
+} ns_user_opts_t;
 
-typedef struct nsjail_conf {
-	int automount_count;
-	nsjail_automount_entry_t *automounts;
-	char *container_root;
-	char *exec_cmd;
-	char **exec_argv;
-	char *hostname;
-	char *id_map;
-	uid_t initial_uid;
-	uid_t initial_gid;
+typedef struct ns_jail {
+	const char *handle;
+	const char *hostname;
+	const char *domainname;
+	char *init_cmd;
+	char **init_args;
+	char *uid_map;
+	char *gid_map;
+	pid_t pid;
+} ns_jail_t;
+
+typedef struct ns_conf {
 	int verbosity;
-	pid_t child_pid;
-	int pipe_fd[2];
-	int disable_namespaces;
-	int disable_automounts;
-	char *config_source;
-} nsjail_conf_t;
+	int signal_pipe[2];
+	int container_count;
+	ns_jail_t *jails;
+	config_t *fcfg;
+	ns_user_opts_t *opts;
+} ns_conf_t;
 
-nsjail_conf_t * nsjail_default_config();
-nsjail_conf_t * nsjail_parse_config(int argc, char **argv);
+typedef struct ns_clone_args {
+	ns_conf_t *config;
+	ns_jail_t *jail;
+} ns_clone_args_t;
 
-int nsjail_wait_signal(nsjail_conf_t *config);
-int nsjail_send_signal(nsjail_conf_t *config);
-int nsjail_map_ids(long pid, nsjail_conf_t *config);
-int nsjail_enter_environment(nsjail_conf_t *config);
-int nsjail_drop_capabilities();
-void nsjail_destroy_config(nsjail_conf_t *config);
-int nsjail_automount(nsjail_conf_t *config);
-void nsjail_lose_dignity();
+typedef int (*ns_request_handler)(ns_user_opts_t *opts);
+ns_user_opts_t *ns_parse_user_opts(int argc, char **argv);
+ns_request_handler ns_dispatch_request(ns_user_opts_t *opts);
+void ns_show_help();
+ns_conf_t *ns_init_config(ns_user_opts_t *opts);
+int ns_load_config(ns_conf_t *config);
+int ns_free_config(ns_conf_t *config);
 
-void print_capabilities(pid_t pid);
+ns_jail_t *ns_lookup_jail(ns_conf_t *config, char *handle);
+int ns_prepare_env(ns_conf_t *config, ns_jail_t *jail);
+int ns_enter_env(ns_conf_t *config, ns_jail_t *jail);
+
+int ns_map_jail_ids(ns_jail_t *jail);
+
+int ns_start_jail(ns_user_opts_t *opts);
+int ns_stop_jail(ns_user_opts_t *opts);
+int ns_jail_info(ns_user_opts_t *opts);
+int ns_kill_jail(ns_user_opts_t *opts);
+int ns_exec_jail(ns_user_opts_t *opts);
+
+int ns_wait_signal(ns_conf_t *config);
+int ns_send_signal(ns_conf_t *config);
+
+static int ns_child(void *arg);
 
 #endif // NSJAIL_H
