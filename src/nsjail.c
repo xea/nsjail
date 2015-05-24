@@ -470,6 +470,7 @@ static int ns_child(void *args) {
 			syslog(LOG_ERR, "Couldn't chroot() to %s: %s", jail->root, strerror(errno));
 			return -1;
 		}
+		syslog(LOG_INFO, "Chroot()'d to %s", jail->root);
 	}
 
 	if (jail->automounts > 0) {
