@@ -153,39 +153,48 @@ int ns_load_config(ns_conf_t *config) {
 		ns_jail_t *containers = (ns_jail_t *) calloc(config->container_count, sizeof(ns_jail_t));
 
 		for (i = 0; i < config->container_count; i++) {
-			config_setting_t *jail = config_setting_get_elem(setting, i);
-			containers[i].handle = jail->name;
-			config_setting_lookup_string(jail, "hostname", &containers[i].hostname);
-			config_setting_lookup_string(jail, "domainname", &containers[i].domainname);
-			config_setting_lookup_string(jail, "init_cmd", (const char **) &containers[i].init_cmd);
+			config_setting_t *definition = config_setting_get_elem(setting, i);
 
-			config_setting_t *args = (config_setting_get_member(jail, "init_args"));
-
-			if (args != NULL && config_setting_is_array(args)) {
-				int argc = config_setting_length(args);
-
-				if (argc > 0) {
-					containers[i].init_args = (char **) calloc(argc, sizeof(char *));
-
-					int argci = 0;
-
-					for (argci = 0; argci < argc; argci++) {
-						containers[i].init_args[argci] = (char *)config_setting_get_string_elem(args, argci);
-					}
-				}
+			if (ns_load_container_config(definition, &containers[i]) == -1) {
+				syslog(LOG_WARNING, "Error while loading container configuration: %s", definition->name);
 			}
-			
-			config_setting_lookup_string(jail, "uid_map", (const char **) &containers[i].uid_map);
-			config_setting_lookup_string(jail, "gid_map", (const char **) &containers[i].gid_map);
-			config_setting_lookup_int(jail, "init_uid", &containers[i].init_uid);
-			config_setting_lookup_int(jail, "init_gid", &containers[i].init_gid);
 		}
 
-		syslog(LOG_INFO, "Initialized %d containers", config->container_count);
+		syslog(LOG_INFO, "Loaded %d container configurations", config->container_count);
 		config->jails = containers;
 	}
 
 	syslog(LOG_INFO, "Configuration loaded");
+
+	return 0;
+}
+
+int ns_load_container_config(config_setting_t *settings, ns_jail_t *jail) {
+	jail->handle = settings->name;
+	config_setting_lookup_string(settings, "hostname", &jail->hostname);
+	config_setting_lookup_string(settings, "domainname", &jail->domainname);
+	config_setting_lookup_string(settings, "init_cmd", (const char **) &jail->init_cmd);
+
+	config_setting_t *args = (config_setting_get_member(settings, "init_args"));
+
+	if (args != NULL && config_setting_is_array(args)) {
+		int argc = config_setting_length(args);
+
+		if (argc > 0) {
+			jail->init_args = (char **) calloc(argc, sizeof(char *));
+
+			int argci = 0;
+
+			for (argci = 0; argci < argc; argci++) {
+				jail->init_args[argci] = (char *)config_setting_get_string_elem(args, argci);
+			}
+		}
+	}
+	
+	config_setting_lookup_string(settings, "uid_map", (const char **) &jail->uid_map);
+	config_setting_lookup_string(settings, "gid_map", (const char **) &jail->gid_map);
+	config_setting_lookup_int(settings, "init_uid", &jail->init_uid);
+	config_setting_lookup_int(settings, "init_gid", &jail->init_gid);
 
 	return 0;
 }
@@ -457,11 +466,11 @@ int ns_show_help(ns_user_opts_t *opts) {
 	printf("  Available opts are the following:\n");
 	printf("      -f <config>       Load configuration from <config> instead of %s\n", NS_DEFAULT_CONFIG_PATH);
 	printf("\n  Available actions are the following:\n");
-	printf("      start             Start a jail");
-	printf("      stop              Stop a jail");
-	printf("      info              Display run-time information about a jail");
-	printf("      kill              Forcefully terminate a jail");
-	printf("      exec              Execute a command within a jail");
+	printf("      start             Start a jail\n");
+	printf("      stop              Stop a jail\n");
+	printf("      info              Display run-time information about a jail\n");
+	printf("      kill              Forcefully terminate a jail\n");
+	printf("      exec              Execute a command within a jail\n");
 	return 0;
 }
 

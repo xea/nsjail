@@ -87,6 +87,7 @@ ns_user_opts_t *ns_parse_user_opts(int argc, char **argv);
 ns_request_handler ns_dispatch_request(ns_user_opts_t *opts);
 ns_conf_t *ns_init_config(ns_user_opts_t *opts);
 int ns_load_config(ns_conf_t *config);
+int ns_load_container_config(config_setting_t *settings, ns_jail_t *jail);
 int ns_free_config(ns_conf_t *config);
 
 ns_jail_t *ns_lookup_jail(ns_conf_t *config, char *handle);
