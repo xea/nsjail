@@ -109,7 +109,7 @@ ns_conf_t *ns_init_config(ns_user_opts_t *opts) {
 	} else {
 		config->verbosity = 0;
 		config->opts = opts;
-		config->container_count = 0;
+		config->jail_count = 0;
 		config->jails = NULL;
 		config->fcfg = NULL;
 	}
@@ -146,22 +146,25 @@ int ns_load_config(ns_conf_t *config) {
 	config_setting_t *setting = config_lookup(config->fcfg, NS_CONF_DEFINITIONS);
 
 	if (setting != NULL) {
-		config->container_count = config_setting_length(setting);	
+		config->jail_count = config_setting_length(setting);	
 
 		int i = 0;
 
-		ns_jail_t *containers = (ns_jail_t *) calloc(config->container_count, sizeof(ns_jail_t));
+		ns_jail_t *jails = (ns_jail_t *) calloc(config->jail_count, sizeof(ns_jail_t));
 
-		for (i = 0; i < config->container_count; i++) {
+		// Load per-jail configuration
+		for (i = 0; i < config->jail_count; i++) {
 			config_setting_t *definition = config_setting_get_elem(setting, i);
 
-			if (ns_load_container_config(definition, &containers[i]) == -1) {
-				syslog(LOG_WARNING, "Error while loading container configuration: %s", definition->name);
+			if (ns_load_jail_config(definition, &jails[i]) == -1) {
+				syslog(LOG_WARNING, "Error while loading jail configuration: %s", definition->name);
 			}
 		}
 
-		syslog(LOG_INFO, "Loaded %d container configurations", config->container_count);
-		config->jails = containers;
+		syslog(LOG_INFO, "Loaded %d jail configurations", config->jail_count);
+		config->jails = jails;
+	} else {
+		syslog(LOG_WARNING, "Could not find jail definitions");
 	}
 
 	syslog(LOG_INFO, "Configuration loaded");
@@ -169,7 +172,11 @@ int ns_load_config(ns_conf_t *config) {
 	return 0;
 }
 
-int ns_load_container_config(config_setting_t *settings, ns_jail_t *jail) {
+/**
+ * Load per-jail configuration. If a configuration setting is not available then it defaults that setting
+ * to NULL or 0.
+ */
+int ns_load_jail_config(config_setting_t *settings, ns_jail_t *jail) {
 	jail->handle = settings->name;
 	config_setting_lookup_string(settings, "hostname", &jail->hostname);
 	config_setting_lookup_string(settings, "domainname", &jail->domainname);
@@ -191,10 +198,17 @@ int ns_load_container_config(config_setting_t *settings, ns_jail_t *jail) {
 		}
 	}
 	
+	config_setting_lookup_string(settings, "root", (const char **) &jail->root);
 	config_setting_lookup_string(settings, "uid_map", (const char **) &jail->uid_map);
 	config_setting_lookup_string(settings, "gid_map", (const char **) &jail->gid_map);
-	config_setting_lookup_int(settings, "init_uid", &jail->init_uid);
-	config_setting_lookup_int(settings, "init_gid", &jail->init_gid);
+
+	if (config_setting_lookup_int(settings, "init_uid", &jail->init_uid) == CONFIG_FALSE) {
+		jail->init_uid = -1;
+	}
+
+	if (config_setting_lookup_int(settings, "init_gid", &jail->init_gid) == CONFIG_FALSE) {
+		jail->init_gid = -1;
+	}
 
 	return 0;
 }
@@ -209,7 +223,7 @@ int ns_free_config(ns_conf_t *config) {
 		if (config->jails != NULL) {
 			int i = 0;
 
-			for (i = 0; i < config->container_count; i++) {
+			for (i = 0; i < config->jail_count; i++) {
 				free(config->jails[i].init_args);
 			}
 
@@ -222,6 +236,10 @@ int ns_free_config(ns_conf_t *config) {
 	return 0;
 }
 
+/**
+ * Retreives a jail configuration that matches the given handle or NULL if no matching jail configurations 
+ * were found.
+ */
 ns_jail_t *ns_lookup_jail(ns_conf_t *config, char *handle) {
 	ns_jail_t *jail = NULL;
 
@@ -229,7 +247,7 @@ ns_jail_t *ns_lookup_jail(ns_conf_t *config, char *handle) {
 	if (config != NULL && handle != NULL) {
 		int i = 0;
 
-		for (i = 0; i < config->container_count; i++) {
+		for (i = 0; i < config->jail_count; i++) {
 			if (strcmp(handle, config->jails[i].handle) == 0) {
 				jail = &config->jails[i];
 				break;
@@ -237,7 +255,7 @@ ns_jail_t *ns_lookup_jail(ns_conf_t *config, char *handle) {
 		}
 
 		if (jail == NULL) {
-			syslog(LOG_WARNING, "Couldn't look up container: %s", handle);
+			syslog(LOG_WARNING, "Couldn't look up jail: %s", handle);
 		}
 	}
 
@@ -283,6 +301,12 @@ int ns_enter_env(ns_conf_t *config, ns_jail_t *jail) {
 		syslog(LOG_ERR, "Couldn't prepare jail environment");
 		return -1;
 	}
+
+	if (waitpid(jail->pid, NULL, 0) == -1) {
+		syslog(LOG_ERR, "Error while waiting for child");
+		return -1;
+	}
+	
 
 
 	return 0;
@@ -389,8 +413,44 @@ static int ns_child(void *args) {
 		return -1;
 	}
 
-	setuid(0);
-	setgid(0);
+	if (jail->init_uid > -1 && setuid(jail->init_uid) == -1) {
+		syslog(LOG_ERR, "Couldn't set child UID to %d: %s", jail->init_uid, strerror(errno));
+		return -1;
+	}
+	
+	if (jail->init_gid > -1 && setgid(jail->init_gid) == -1) {
+		syslog(LOG_ERR, "Couldn't set child GID to %d: %s", jail->init_gid, strerror(errno));
+		return -1;
+	}
+
+	if (jail->hostname != NULL) {
+		struct utsname uts;
+
+		if (sethostname(jail->hostname, strlen(jail->hostname)) == -1) { 
+			syslog(LOG_ERR, "Couldn't set child hostname to %s: %s", jail->hostname, strerror(errno));
+			return -1;
+		}
+
+		if (uname(&uts) == -1) {
+			syslog(LOG_WARNING, "Couldn't verify child hostname: %s", strerror(errno));
+		} else {
+			syslog(LOG_INFO, "Child hostname is set to: %s", jail->hostname);
+		}
+	}
+
+	if (jail->domainname != NULL) {
+		if (setdomainname(jail->domainname, strlen(jail->domainname)) == -1) {
+			syslog(LOG_ERR, "Couldn't set child domainname to %s: %s", jail->domainname, strerror(errno));
+			return -1;
+		}
+	}
+
+	if (jail->root != NULL) {
+		if (chroot(jail->root) == -1) {
+			syslog(LOG_ERR, "Couldn't chroot() to %s: %s", jail->root, strerror(errno));
+			return -1;
+		}
+	}
 
 	if (execvp(jail->init_cmd, jail->init_args) == -1) {
 		syslog(LOG_ERR, "Error during executing the program: %s", strerror(errno));
@@ -426,11 +486,6 @@ int ns_start_jail(ns_user_opts_t *opts) {
 		return -1;
 	}
 
-	if (waitpid(jail->pid, NULL, 0) == -1) {
-		syslog(LOG_ERR, "Error while waiting for child");
-		return -1;
-	}
-	
 	ns_free_config(config);
 
 	syslog(LOG_INFO, "Jail started");
@@ -462,7 +517,7 @@ int ns_exec_jail(ns_user_opts_t *opts) {
  */
 int ns_show_help(ns_user_opts_t *opts) {
 	(void) opts;
-	printf("Usage: nsjail [opts] <action> [container]\n");
+	printf("Usage: nsjail [opts] <action> [jail]\n");
 	printf("  Available opts are the following:\n");
 	printf("      -f <config>       Load configuration from <config> instead of %s\n", NS_DEFAULT_CONFIG_PATH);
 	printf("\n  Available actions are the following:\n");
@@ -479,7 +534,7 @@ int main(int argc, char **argv) {
 
 	ns_user_opts_t *opts = ns_parse_user_opts(argc, argv);
 
-	printf("Reality check: request: %d container: %s\n", opts->request, opts->selection);
+	printf("Reality check: request: %d jail: %s\n", opts->request, opts->selection);
 
 	ns_request_handler handler = ns_dispatch_request(opts);
 

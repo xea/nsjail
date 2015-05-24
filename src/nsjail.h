@@ -43,7 +43,7 @@
 
 #define NS_DEFAULT_CONFIG_PATH 		"/etc/nsjail/nsjail.conf"
 
-#define NS_CONF_DEFINITIONS 	"containers"
+#define NS_CONF_DEFINITIONS 	"jails"
 
 #define STACK_SIZE (1024 * 1024)
 
@@ -63,6 +63,7 @@ typedef struct ns_jail {
 	char **init_args;
 	char *uid_map;
 	char *gid_map;
+	char *root;
 	int init_uid;
 	int init_gid;
 	pid_t pid;
@@ -71,7 +72,7 @@ typedef struct ns_jail {
 typedef struct ns_conf {
 	int verbosity;
 	int signal_pipe[2];
-	int container_count;
+	int jail_count;
 	ns_jail_t *jails;
 	config_t *fcfg;
 	ns_user_opts_t *opts;
@@ -87,7 +88,7 @@ ns_user_opts_t *ns_parse_user_opts(int argc, char **argv);
 ns_request_handler ns_dispatch_request(ns_user_opts_t *opts);
 ns_conf_t *ns_init_config(ns_user_opts_t *opts);
 int ns_load_config(ns_conf_t *config);
-int ns_load_container_config(config_setting_t *settings, ns_jail_t *jail);
+int ns_load_jail_config(config_setting_t *settings, ns_jail_t *jail);
 int ns_free_config(ns_conf_t *config);
 
 ns_jail_t *ns_lookup_jail(ns_conf_t *config, char *handle);
