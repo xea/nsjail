@@ -41,6 +41,10 @@
 #define NS_REQUEST_HELP 	4
 #define NS_REQUEST_EXECUTE      5
 
+#define NS_AUTOMOUNTS_DEV 	1
+#define NS_AUTOMOUNTS_SYS       2
+#define NS_AUTOMOUNTS_PROC 	4
+
 #define NS_DEFAULT_CONFIG_PATH 		"/etc/nsjail/nsjail.conf"
 
 #define NS_CONF_DEFINITIONS 	"jails"
@@ -66,6 +70,7 @@ typedef struct ns_jail {
 	char *root;
 	int init_uid;
 	int init_gid;
+	int automounts;
 	pid_t pid;
 } ns_jail_t;
 
@@ -96,6 +101,7 @@ int ns_prepare_env(ns_conf_t *config, ns_jail_t *jail);
 int ns_enter_env(ns_conf_t *config, ns_jail_t *jail);
 
 int ns_map_jail_ids(ns_jail_t *jail);
+int ns_automount(ns_jail_t *jail);
 
 int ns_start_jail(ns_user_opts_t *opts);
 int ns_stop_jail(ns_user_opts_t *opts);

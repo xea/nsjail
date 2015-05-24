@@ -210,6 +210,26 @@ int ns_load_jail_config(config_setting_t *settings, ns_jail_t *jail) {
 		jail->init_gid = -1;
 	}
 
+	config_setting_t *automounts = (config_setting_get_member(settings, "automounts"));
+
+	if (automounts != NULL && config_setting_is_array(args)) {
+		int c = config_setting_length(automounts);
+
+		if (c > 0) {
+			int ci = 0;
+
+			for (ci = 0; ci < c; ci++) {
+				if (strncmp("dev", config_setting_get_string_elem(automounts, ci), 3) == 0) {
+					jail->automounts |= NS_AUTOMOUNTS_DEV;
+				} else if (strncmp("sys", config_setting_get_string_elem(automounts, ci), 3) == 0) {
+					jail->automounts |= NS_AUTOMOUNTS_SYS;
+				} else if (strncmp("proc", config_setting_get_string_elem(automounts, ci), 4) == 0) {
+					jail->automounts |= NS_AUTOMOUNTS_PROC;
+				}
+			}
+		}
+	}
+
 	return 0;
 }
 
@@ -452,10 +472,39 @@ static int ns_child(void *args) {
 		}
 	}
 
+	if (jail->automounts > 0) {
+		if (ns_automount(jail) == -1) {
+			syslog(LOG_ERR, "Couldn't automount jail fs");
+			return -1;
+		}
+	}
+
+
 	if (execvp(jail->init_cmd, jail->init_args) == -1) {
 		syslog(LOG_ERR, "Error during executing the program: %s", strerror(errno));
 		return -1;
 	}
+	return 0;
+}
+
+int ns_automount(ns_jail_t *jail) {
+	if (jail == NULL) {
+		return -1;
+	}
+
+	if (jail->automounts && NS_AUTOMOUNTS_PROC) {
+		if (mount("none", "/proc", "proc", MS_NOEXEC, (void *)NULL) == -1) {
+			syslog(LOG_ERR, "Could not mount procfs: %s", strerror(errno));
+			return -1;
+		}
+	}
+	if (jail->automounts && NS_AUTOMOUNTS_SYS) {
+		if (mount("none", "/sys", "sysfs", MS_NOEXEC, (void *)NULL) == -1) {
+			syslog(LOG_ERR, "Could not mount ssyfs: %s", strerror(errno));
+			return -1;
+		}
+	}
+
 	return 0;
 }
 
@@ -494,21 +543,25 @@ int ns_start_jail(ns_user_opts_t *opts) {
 
 int ns_stop_jail(ns_user_opts_t *opts) {
 	(void) opts;
+	printf("Not implemented yet :<\n");
 	return 0;
 }
 
 int ns_info_jail(ns_user_opts_t *opts) {
 	(void) opts;
+	printf("Not implemented yet :<\n");
 	return 0;
 }
 
 int ns_kill_jail(ns_user_opts_t *opts) {
 	(void) opts;
+	printf("Not implemented yet :<\n");
 	return 0;
 }
 
 int ns_exec_jail(ns_user_opts_t *opts) {
 	(void) opts;
+	printf("Not implemented yet :<\n");
 	return 0;
 }
 
