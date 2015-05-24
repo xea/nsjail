@@ -1,56 +1,71 @@
 #include "nsjail.h"
 
-
-
+/**
+ * Parse command-line arguments (or arguments from ny other source) and restructures them
+ * into an ns_user_opts_t.
+ *
+ * This function returns NULL on error or a pointer to an initialized ns_user_opts_t if
+ * it was successful.
+ */
 ns_user_opts_t *ns_parse_user_opts(int argc, char **argv) {
 	ns_user_opts_t *useropts = (ns_user_opts_t *) calloc(1, sizeof(ns_user_opts_t));
 
+	if (useropts == NULL) {
+		syslog(LOG_ERR, "Could not allocate memory for user options: %s", strerror(errno));
+		return NULL;
+	}
+
+	// step 1: initialise default vaules
 	useropts->request = NS_REQUEST_UNKNOWN;
 	useropts->config_path = NULL;
 	useropts->selection = NULL;
 
-	if (useropts != NULL) {
-		int opt;
-		int parse_error = FALSE;
+	// step 2: read command-line switches
+	int opt;
+	int parse_error = FALSE;
 
-		while ((opt = getopt(argc, argv, "+ehf:")) != -1) {
-			switch (opt) {
-			case 'f': useropts->config_path = optarg; 	break;
-			case 'h': useropts->request = NS_REQUEST_HELP;  break;
-			case 'e': 
-				useropts->request = NS_REQUEST_EXECUTE; 
-				useropts->selection = optarg; 	
-				break;
-			default: parse_error = TRUE; 			break;
-			}
-
-			if (parse_error == TRUE) {
-				useropts->request = NS_REQUEST_HELP;
-				break;
-			}
+	while ((opt = getopt(argc, argv, "+ehf:")) != -1) {
+		switch (opt) {
+		case 'f': useropts->config_path = optarg; 	break;
+		case 'h': useropts->request = NS_REQUEST_HELP;  break;
+		case 'e': 
+			useropts->request = NS_REQUEST_EXECUTE; 
+			useropts->selection = optarg; 	
+			break;
+		default: parse_error = TRUE; 			break;
 		}
 
-		if (!parse_error && argc > optind) {
-			if (useropts->request == NS_REQUEST_EXECUTE) {
-			} else if (strcmp("start", argv[optind]) == 0) {
-				useropts->request = NS_REQUEST_START;
-			} else if (strcmp("stop", argv[optind]) == 0) {
-				useropts->request = NS_REQUEST_STOP;
-			} else if (strcmp("kill", argv[optind]) == 0) {
-				useropts->request = NS_REQUEST_KILL;
-			} else if (strcmp("info", argv[optind]) == 0) {
-				useropts->request = NS_REQUEST_INFO;
-			}
+		if (parse_error == TRUE) {
+			useropts->request = NS_REQUEST_HELP;
+			break;
+		}
+	}
 
-			if (argc > optind + 1) {
-				useropts->selection = argv[optind + 1];
-			}
+	// step 3: check additional arguments
+	if (!parse_error && argc > optind) {
+		if (useropts->request == NS_REQUEST_EXECUTE) {
+		} else if (strcmp("start", argv[optind]) == 0) {
+			useropts->request = NS_REQUEST_START;
+		} else if (strcmp("stop", argv[optind]) == 0) {
+			useropts->request = NS_REQUEST_STOP;
+		} else if (strcmp("kill", argv[optind]) == 0) {
+			useropts->request = NS_REQUEST_KILL;
+		} else if (strcmp("info", argv[optind]) == 0) {
+			useropts->request = NS_REQUEST_INFO;
+		}
+
+		if (argc > optind + 1) {
+			useropts->selection = argv[optind + 1];
 		}
 	}
 
 	return useropts;
 }
 
+/**
+ * Decides which action to perform based on user-supplied options and returns the appropriate
+ * handler function or NULL if there was an unrecoverable error.
+ */
 ns_request_handler ns_dispatch_request(ns_user_opts_t *opts) {
 	if (opts == NULL) {
 		syslog(LOG_ERR, "Couldn't dispatch NULL request");
@@ -75,7 +90,7 @@ ns_request_handler ns_dispatch_request(ns_user_opts_t *opts) {
 		case NS_REQUEST_UNKNOWN:
 		case NS_REQUEST_HELP:
 		default:
-			ns_show_help();
+			handler = &ns_show_help;
 			break;
 		}
 
@@ -83,12 +98,9 @@ ns_request_handler ns_dispatch_request(ns_user_opts_t *opts) {
 	}
 }
 
-void ns_show_help() {
-	printf("Usage: nsjail [opts] <action> [container]\n");
-	printf("  Where opts are the following:\n");
-	printf("      -f <config>       Load configuration from <config> instead of %s\n", NS_DEFAULT_CONFIG_PATH);
-}
-
+/**
+ * Allocate and initialize a chunk of memory for the run-time configuration
+ */
 ns_conf_t *ns_init_config(ns_user_opts_t *opts) {
 	ns_conf_t *config = (ns_conf_t *) calloc(1, sizeof(ns_conf_t));
 
@@ -97,11 +109,17 @@ ns_conf_t *ns_init_config(ns_user_opts_t *opts) {
 	} else {
 		config->verbosity = 0;
 		config->opts = opts;
+		config->container_count = 0;
+		config->jails = NULL;
+		config->fcfg = NULL;
 	}
 
 	return config;
 }
 
+/**
+ * Load run-time configuration from the location specified in config->opts->config_path.
+ */
 int ns_load_config(ns_conf_t *config) {
 	if (config == NULL) {
 		syslog(LOG_ERR, "Couldn't load config to NULL");
@@ -109,6 +127,13 @@ int ns_load_config(ns_conf_t *config) {
 	}
 
 	config->fcfg = (config_t *) calloc(1, sizeof(config_t));
+
+	if (config->fcfg == NULL) {
+		syslog(LOG_ERR, "Couldn't allocate memory for run-time configuration: %s", strerror(errno));
+		return -1;
+	}
+
+	// Initialize and test libconfig
 	config_init(config->fcfg);
 
 	if (!config_read_file(config->fcfg, config->opts->config_path)) {
@@ -118,7 +143,7 @@ int ns_load_config(ns_conf_t *config) {
 		return -1;
 	}
 
-	config_setting_t *setting = config_lookup(config->fcfg, "containers");
+	config_setting_t *setting = config_lookup(config->fcfg, NS_CONF_DEFINITIONS);
 
 	if (setting != NULL) {
 		config->container_count = config_setting_length(setting);	
@@ -152,6 +177,8 @@ int ns_load_config(ns_conf_t *config) {
 			
 			config_setting_lookup_string(jail, "uid_map", (const char **) &containers[i].uid_map);
 			config_setting_lookup_string(jail, "gid_map", (const char **) &containers[i].gid_map);
+			config_setting_lookup_int(jail, "init_uid", &containers[i].init_uid);
+			config_setting_lookup_int(jail, "init_gid", &containers[i].init_gid);
 		}
 
 		syslog(LOG_INFO, "Initialized %d containers", config->container_count);
@@ -417,6 +444,24 @@ int ns_kill_jail(ns_user_opts_t *opts) {
 }
 
 int ns_exec_jail(ns_user_opts_t *opts) {
+	(void) opts;
+	return 0;
+}
+
+/**
+ * Display help message about program usage
+ */
+int ns_show_help(ns_user_opts_t *opts) {
+	(void) opts;
+	printf("Usage: nsjail [opts] <action> [container]\n");
+	printf("  Available opts are the following:\n");
+	printf("      -f <config>       Load configuration from <config> instead of %s\n", NS_DEFAULT_CONFIG_PATH);
+	printf("\n  Available actions are the following:\n");
+	printf("      start             Start a jail");
+	printf("      stop              Stop a jail");
+	printf("      info              Display run-time information about a jail");
+	printf("      kill              Forcefully terminate a jail");
+	printf("      exec              Execute a command within a jail");
 	return 0;
 }
 
