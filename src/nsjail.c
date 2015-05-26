@@ -182,20 +182,28 @@ int ns_load_jail_config(config_setting_t *settings, ns_jail_t *jail) {
 	config_setting_lookup_string(settings, "domainname", &jail->domainname);
 	config_setting_lookup_string(settings, "init_cmd", (const char **) &jail->init_cmd);
 
+	if (jail->init_cmd == NULL) {
+		syslog(LOG_ERR, "No init command was found in configuration :<");
+		return -1;
+	}
+
 	config_setting_t *args = (config_setting_get_member(settings, "init_args"));
 
 	if (args != NULL && config_setting_is_array(args)) {
 		int argc = config_setting_length(args);
 
-		if (argc > 0) {
-			jail->init_args = (char **) calloc(argc, sizeof(char *));
+		jail->init_args = (char **) calloc(argc + 2, sizeof(char *));
 
-			int argci = 0;
+		int argci = 0;
 
-			for (argci = 0; argci < argc; argci++) {
-				jail->init_args[argci] = (char *)config_setting_get_string_elem(args, argci);
-			}
+		jail->init_args[0] = jail->init_cmd;
+
+		for (argci = 0; argci < argc; argci++) {
+			jail->init_args[argci + 1] = (char *)config_setting_get_string_elem(args, argci);
 		}
+	} else {
+		jail->init_args = (char **) calloc(2, sizeof(char *));
+		jail->init_args[0] = jail->init_cmd;
 	}
 	
 	config_setting_lookup_string(settings, "root", (const char **) &jail->root);
@@ -480,6 +488,9 @@ static int ns_child(void *args) {
 		}
 	}
 
+	syslog(LOG_DEBUG, "cmd: %s\n", jail->init_cmd);
+	syslog(LOG_DEBUG, "argv[0]: %s\n", jail->init_args[0]);
+	syslog(LOG_DEBUG, "lofasz");
 
 	if (execvp(jail->init_cmd, jail->init_args) == -1) {
 		syslog(LOG_ERR, "Error during executing the program: %s", strerror(errno));
