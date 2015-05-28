@@ -3,6 +3,7 @@
 
 #define _GNU_SOURCE
 
+#include <time.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <sched.h>
@@ -59,6 +60,12 @@ typedef struct ns_user_opts {
 	char *config_path;
 } ns_user_opts_t;
 
+typedef struct ns_network {
+	const char *link;
+	const char *address;
+	const char *gateway;
+} ns_network_t;
+
 typedef struct ns_jail {
 	const char *handle;
 	const char *hostname;
@@ -72,6 +79,7 @@ typedef struct ns_jail {
 	int init_gid;
 	int automounts;
 	pid_t pid;
+	ns_network_t *network;
 } ns_jail_t;
 
 typedef struct ns_conf {
@@ -99,9 +107,13 @@ int ns_free_config(ns_conf_t *config);
 ns_jail_t *ns_lookup_jail(ns_conf_t *config, char *handle);
 int ns_prepare_env(ns_conf_t *config, ns_jail_t *jail);
 int ns_enter_env(ns_conf_t *config, ns_jail_t *jail);
+int ns_cleanup(ns_conf_t *config, ns_jail_t *jail);
 
 int ns_map_jail_ids(ns_jail_t *jail);
 int ns_automount(ns_jail_t *jail);
+
+int ns_setup_host_network(ns_conf_t *config, ns_jail_t *jail);
+int ns_setup_jail_network(ns_conf_t *config, ns_jail_t *jail);
 
 int ns_start_jail(ns_user_opts_t *opts);
 int ns_stop_jail(ns_user_opts_t *opts);

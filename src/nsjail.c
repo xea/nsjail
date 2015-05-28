@@ -238,6 +238,17 @@ int ns_load_jail_config(config_setting_t *settings, ns_jail_t *jail) {
 		}
 	}
 
+	// Check network preferences
+	jail->network = (ns_network_t *) calloc(1, sizeof(ns_network_t));
+	config_setting_t *network = config_setting_get_member(settings, "network");
+
+	if (network != NULL) {
+		config_setting_lookup_string(network, "link", &jail->network->link);
+		config_setting_lookup_string(network, "address", &jail->network->address);
+		config_setting_lookup_string(network, "gateway", &jail->network->gateway);
+	} 
+
+
 	return 0;
 }
 
@@ -252,6 +263,9 @@ int ns_free_config(ns_conf_t *config) {
 			int i = 0;
 
 			for (i = 0; i < config->jail_count; i++) {
+				if (config->jails[i].network != NULL) {
+					free(config->jails[i].network);
+				}
 				free(config->jails[i].init_args);
 			}
 
@@ -304,6 +318,8 @@ int ns_prepare_env(ns_conf_t *config, ns_jail_t *jail) {
 
 	jail->pid = clone(ns_child, child_stack + STACK_SIZE, flags, (void *) &args);
 
+	ns_setup_host_network(config, jail);
+
 	if (ns_map_jail_ids(jail) == -1) {
 		syslog(LOG_ERR, "Couldn't map ids :<");
 	}
@@ -330,13 +346,23 @@ int ns_enter_env(ns_conf_t *config, ns_jail_t *jail) {
 		return -1;
 	}
 
+
+	if (ns_cleanup(config, jail) == NS_ERROR) {
+		syslog(LOG_ERR, "Couldn't clean up :<");
+		return -1;
+	}
+
+
 	if (waitpid(jail->pid, NULL, 0) == -1) {
 		syslog(LOG_ERR, "Error while waiting for child");
 		return -1;
 	}
 	
 
+	return 0;
+}
 
+int ns_cleanup(ns_conf_t *config, ns_jail_t *jail) {
 	return 0;
 }
 
@@ -394,6 +420,79 @@ int ns_map_jail_ids(ns_jail_t *jail) {
 	return 0;
 }
 
+/**
+ * This function is both ugly and insecure. I'm going to refactor it as soon as I have some time
+ */
+int ns_setup_host_network(ns_conf_t *config, ns_jail_t *jail) {
+	srand(time(NULL));
+
+	// FIXME this is quite probably not the best practice but this will do for the time being
+	int ifnamesize = 5;
+	char localif[] = "veth00000";
+	const char if_charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+	// TODO extract this fuction to a nem generator
+
+	int i = 0;
+	int s = (int) (sizeof(if_charset) -1);
+
+	for (i = 0; i < ifnamesize; i++) {
+		int key = rand() % s;
+		// 4 is because veth is 4 characters long. I know, blame me.
+		localif[4 + i] = if_charset[key];
+	}
+
+	// by this point we should have a local "randomish" interface name and a remote interface name, time to set things up
+
+	// this shouldn't be done like this either, I don't care for now. 
+		
+	char fmt_setup_host_if[] = "ip link add veth000000 type veth peer name rveth0";
+	char fmt_setup_host_br[] = "brctl addif brlofasz000000 veth00000 rveth0";
+	char fmt_setup_if_transfer[] = "ip link set rveth0 netns 0000000";
+	char fmt_setup_if_up[] = "ifconfig veth00000 255.255.255.255/24 up";
+
+	if (snprintf(fmt_setup_host_if, strlen(fmt_setup_host_if), "ip link add %s type veth peer name rveth0", localif) != -1) {
+		printf("%s\n", fmt_setup_host_if);
+		system(fmt_setup_host_if);
+	}
+
+	if (snprintf(fmt_setup_host_br, strlen(fmt_setup_host_br), "brctl addif %s %s rveth0", jail->network->link, localif) != -1) {
+		printf("%s\n", fmt_setup_host_br);
+		system(fmt_setup_host_br);
+	}
+
+	if (snprintf(fmt_setup_if_up, strlen(fmt_setup_if_up), "ifconfig %s up", localif) != -1) {
+		system(fmt_setup_if_up);
+	}
+
+/*	if (snprintf(fmt_setup_if_up, strlen(fmt_setup_if_up), "ifconfig rveth0 %s up", jail->network->address) != -1) {
+		system(fmt_setup_if_up);
+	}
+*/
+	if (snprintf(fmt_setup_if_transfer, strlen(fmt_setup_if_transfer), "ip link set rveth0 netns %d", jail->pid) != -1) {
+		printf("%s\n", fmt_setup_if_transfer);
+		system(fmt_setup_if_transfer);
+	}
+
+	return 0;
+}
+
+int ns_setup_jail_network(ns_conf_t *config, ns_jail_t *jail) {
+	char fmt_setup_jail_if[] = "ifconfig veth00000 255.255.255.255/24 up";
+	char fmt_setup_jail_gw[] = "route add default gw 255.255.255.255";
+
+	if (snprintf(fmt_setup_jail_if, strlen(fmt_setup_jail_if), "ifconfig rveth0 %s up", jail->network->address) != -1) {
+		system(fmt_setup_jail_if);
+	}
+
+	if (snprintf(fmt_setup_jail_gw, strlen(fmt_setup_jail_gw), "route add default gw %s", jail->network->gateway) != -1) {
+		system(fmt_setup_jail_gw);
+	}
+
+	syslog(LOG_INFO, "Network signal received");
+	return 0;
+}
+
 int ns_wait_signal(ns_conf_t *config) {
 	if (config == NULL) {
 		return -1;
@@ -405,7 +504,7 @@ int ns_wait_signal(ns_conf_t *config) {
 
 	close(config->signal_pipe[1]);
 
-	if (read(config->signal_pipe[0], &ch, 1) != 0) {
+	if (read(config->signal_pipe[0], &ch, 1) == -1) {
 		syslog(LOG_ERR, "Error during waiting for pipe");
 		return -1;
 	}
@@ -423,7 +522,13 @@ int ns_send_signal(ns_conf_t *config) {
 
 	syslog(LOG_DEBUG, "Sending signal");
 
-	if (close(config->signal_pipe[1]) == -1) {
+/*	if (close(config->signal_pipe[1]) == -1) {
+		return -1;
+	}
+*/
+	const char msg[] = "A";
+	if (write(config->signal_pipe[1], msg, 1) == -1) {
+		syslog(LOG_ERR, "Error during signalling: %s\n", strerror(errno));
 		return -1;
 	}
 
@@ -473,11 +578,17 @@ static int ns_child(void *args) {
 		}
 	}
 
+	if (ns_setup_jail_network(config, jail) == -1) {
+		syslog(LOG_ERR, "Error during waiting for network signal: %s\n", strerror(errno));
+		return -1;
+	}
+
 	if (jail->root != NULL) {
 		if (chroot(jail->root) == -1) {
 			syslog(LOG_ERR, "Couldn't chroot() to %s: %s", jail->root, strerror(errno));
 			return -1;
 		}
+		chdir("/");
 		syslog(LOG_INFO, "Chroot()'d to %s", jail->root);
 	}
 
