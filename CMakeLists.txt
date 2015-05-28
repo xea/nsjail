@@ -9,5 +9,5 @@ add_executable (nsjail src/nsjail.c)
 target_link_libraries (nsjail LINK_PUBLIC cap config)
 #target_link_libraries (nsjaild LINK_PUBLIC cap config)
 
-install (TARGETS nsjail DESTINATION in)
+install (TARGETS nsjail DESTINATION bin)
 #install (TARGETS nsjaild DESTINATION sbin)
