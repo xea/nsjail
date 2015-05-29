@@ -3,6 +3,7 @@
 
 #define _GNU_SOURCE
 
+#include <grp.h>
 #include <time.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -50,6 +51,8 @@
 
 #define NS_CONF_DEFINITIONS 	"jails"
 
+#define NS_MAX_ID_LENGTH 	32
+#define NS_MAX_CMD_LENGTH 	255
 #define STACK_SIZE (1024 * 1024)
 
 static char child_stack[STACK_SIZE];
@@ -58,10 +61,12 @@ typedef struct ns_user_opts {
 	int request;
 	char *selection;
 	char *config_path;
+	int daemonize;
 } ns_user_opts_t;
 
 typedef struct ns_network {
 	const char *link;
+	const char *interface;
 	const char *address;
 	const char *gateway;
 } ns_network_t;

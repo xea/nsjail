@@ -19,15 +19,17 @@ ns_user_opts_t *ns_parse_user_opts(int argc, char **argv) {
 	useropts->request = NS_REQUEST_UNKNOWN;
 	useropts->config_path = NULL;
 	useropts->selection = NULL;
+	useropts->daemonize = 1;
 
 	// step 2: read command-line switches
 	int opt;
 	int parse_error = FALSE;
 
-	while ((opt = getopt(argc, argv, "+ehf:")) != -1) {
+	while ((opt = getopt(argc, argv, "+enhf:")) != -1) {
 		switch (opt) {
 		case 'f': useropts->config_path = optarg; 	break;
 		case 'h': useropts->request = NS_REQUEST_HELP;  break;
+		case 'n': useropts->daemonize = 0; 		break;
 		case 'e': 
 			useropts->request = NS_REQUEST_EXECUTE; 
 			useropts->selection = optarg; 	
@@ -244,6 +246,7 @@ int ns_load_jail_config(config_setting_t *settings, ns_jail_t *jail) {
 
 	if (network != NULL) {
 		config_setting_lookup_string(network, "link", &jail->network->link);
+		config_setting_lookup_string(network, "interface", &jail->network->interface);
 		config_setting_lookup_string(network, "address", &jail->network->address);
 		config_setting_lookup_string(network, "gateway", &jail->network->gateway);
 	} 
@@ -357,12 +360,13 @@ int ns_enter_env(ns_conf_t *config, ns_jail_t *jail) {
 		syslog(LOG_ERR, "Error while waiting for child");
 		return -1;
 	}
-	
 
 	return 0;
 }
 
 int ns_cleanup(ns_conf_t *config, ns_jail_t *jail) {
+	(void) config;
+	(void) jail;
 	return 0;
 }
 
@@ -424,17 +428,20 @@ int ns_map_jail_ids(ns_jail_t *jail) {
  * This function is both ugly and insecure. I'm going to refactor it as soon as I have some time
  */
 int ns_setup_host_network(ns_conf_t *config, ns_jail_t *jail) {
-	srand(time(NULL));
+	(void) config;
 
-	// FIXME this is quite probably not the best practice but this will do for the time being
-	int ifnamesize = 5;
-	char localif[] = "veth00000";
+	int ifnamesize = 5; // 5 here is just an arbitrary number, long enough to be "unique", short enough to remember
+	char *localif = (char *) calloc(NS_MAX_ID_LENGTH, sizeof(char));
+	char *remoteif = "rveth0";
 	const char if_charset[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-	// TODO extract this fuction to a nem generator
+	// TODO extract this to a name generator function
 
 	int i = 0;
 	int s = (int) (sizeof(if_charset) -1);
+
+	srand(time(NULL));
+	(void) snprintf(localif, NS_MAX_ID_LENGTH, "veth0");
 
 	for (i = 0; i < ifnamesize; i++) {
 		int key = rand() % s;
@@ -442,55 +449,99 @@ int ns_setup_host_network(ns_conf_t *config, ns_jail_t *jail) {
 		localif[4 + i] = if_charset[key];
 	}
 
-	// by this point we should have a local "randomish" interface name and a remote interface name, time to set things up
+	char *cmdbuf = (char *) calloc(NS_MAX_CMD_LENGTH, sizeof(char));
+	int status = 0;
+	int retval = 0;
 
-	// this shouldn't be done like this either, I don't care for now. 
-		
-	char fmt_setup_host_if[] = "ip link add veth000000 type veth peer name rveth0";
-	char fmt_setup_host_br[] = "brctl addif brlofasz000000 veth00000 rveth0";
-	char fmt_setup_if_transfer[] = "ip link set rveth0 netns 0000000";
-	char fmt_setup_if_up[] = "ifconfig veth00000 255.255.255.255/24 up";
-
-	if (snprintf(fmt_setup_host_if, strlen(fmt_setup_host_if), "ip link add %s type veth peer name rveth0", localif) != -1) {
-		printf("%s\n", fmt_setup_host_if);
-		system(fmt_setup_host_if);
+	// TODO the following block needs proper error handling. right now when something breaks then it will still try and fail.
+	status = snprintf(cmdbuf, NS_MAX_CMD_LENGTH, "ip link add %s type veth peer name %s", localif, remoteif);
+	if (status < NS_MAX_CMD_LENGTH && status > 0) {
+		(void) system(cmdbuf);
+		memset(cmdbuf, 0, NS_MAX_CMD_LENGTH);
+	} else {
+		syslog(LOG_ERR, "Couldn't create new virtual interface pair");
+		retval = -1;
 	}
 
-	if (snprintf(fmt_setup_host_br, strlen(fmt_setup_host_br), "brctl addif %s %s rveth0", jail->network->link, localif) != -1) {
-		printf("%s\n", fmt_setup_host_br);
-		system(fmt_setup_host_br);
+	status = snprintf(cmdbuf, NS_MAX_CMD_LENGTH, "brctl addif %s %s %s", jail->network->link, localif, remoteif);
+	if (status < NS_MAX_CMD_LENGTH && status > 0) {
+		(void) system(cmdbuf);
+		memset(cmdbuf, 0, NS_MAX_CMD_LENGTH);
+	} else {
+		syslog(LOG_ERR, "Couldn't add virtual interface pair to bridge %s", jail->network->link);
+		retval = -1;
 	}
 
-	if (snprintf(fmt_setup_if_up, strlen(fmt_setup_if_up), "ifconfig %s up", localif) != -1) {
-		system(fmt_setup_if_up);
+	status = snprintf(cmdbuf, NS_MAX_CMD_LENGTH, "ifconfig %s up", localif);
+	if (status < NS_MAX_CMD_LENGTH && status > 0) {
+		(void) system(cmdbuf);
+		memset(cmdbuf, 0, NS_MAX_CMD_LENGTH);
+	} else {
+		syslog(LOG_ERR, "Couldn't bring host interface %s up", localif);
+		retval = -1;
 	}
 
-/*	if (snprintf(fmt_setup_if_up, strlen(fmt_setup_if_up), "ifconfig rveth0 %s up", jail->network->address) != -1) {
-		system(fmt_setup_if_up);
-	}
-*/
-	if (snprintf(fmt_setup_if_transfer, strlen(fmt_setup_if_transfer), "ip link set rveth0 netns %d", jail->pid) != -1) {
-		printf("%s\n", fmt_setup_if_transfer);
-		system(fmt_setup_if_transfer);
+	status = snprintf(cmdbuf, NS_MAX_CMD_LENGTH, "ip link set %s netns %d", remoteif, jail->pid);
+	if (status < NS_MAX_CMD_LENGTH && status > 0) {
+		(void) system(cmdbuf);
+		memset(cmdbuf, 0, NS_MAX_CMD_LENGTH);
+	} else {
+		syslog(LOG_ERR, "Couldn't assign remote interface to the namespace of PID %d", jail->pid);
+		retval = -1;
 	}
 
-	return 0;
+	free(cmdbuf);
+	free(localif);
+
+	return retval;
 }
 
-int ns_setup_jail_network(ns_conf_t *config, ns_jail_t *jail) {
-	char fmt_setup_jail_if[] = "ifconfig veth00000 255.255.255.255/24 up";
-	char fmt_setup_jail_gw[] = "route add default gw 255.255.255.255";
 
+int ns_setup_jail_network(ns_conf_t *config, ns_jail_t *jail) {
+	(void) config;
+	char *cmdbuf = (char *) calloc(NS_MAX_CMD_LENGTH, sizeof(char));
+
+	int status = 0;
+	int retval = 0;
+
+	status = snprintf(cmdbuf, NS_MAX_CMD_LENGTH, "ifconfig %s %s up", jail->network->interface, jail->network->address);
+	if (status < NS_MAX_ID_LENGTH && status > 0) {
+		(void) system(cmdbuf);
+		memset(cmdbuf, 0, NS_MAX_CMD_LENGTH);
+	} else {
+		syslog(LOG_ERR, "Couldn't bring guest virtual interface up: %s", jail->network->interface);
+		retval = -1;
+	}
+
+	status = snprintf(cmdbuf, NS_MAX_CMD_LENGTH, "route add default gw %s", jail->network->gateway);
+	if (status < NS_MAX_ID_LENGTH && status > 0) {
+		(void) system(cmdbuf);
+		memset(cmdbuf, 0, NS_MAX_CMD_LENGTH);
+	} else {
+		syslog(LOG_ERR, "Couldn't set guest default gateway: %s", jail->network->gateway);
+		retval = -1;
+	}
+
+
+	/*
 	if (snprintf(fmt_setup_jail_if, strlen(fmt_setup_jail_if), "ifconfig rveth0 %s up", jail->network->address) != -1) {
 		system(fmt_setup_jail_if);
+	} else {
+		syslog(LOG_ERR, "Couldn't bring virtual guest ethernet interface up: %s", strerror(errno));
+		return -1;
 	}
 
 	if (snprintf(fmt_setup_jail_gw, strlen(fmt_setup_jail_gw), "route add default gw %s", jail->network->gateway) != -1) {
 		system(fmt_setup_jail_gw);
+	} else {
+		syslog(LOG_ERR, "Couldn't add default gateway: %s", strerror(errno));
+		return -1;
 	}
+	*/
 
-	syslog(LOG_INFO, "Network signal received");
-	return 0;
+	free(cmdbuf);
+
+	return retval;
 }
 
 int ns_wait_signal(ns_conf_t *config) {
@@ -601,7 +652,6 @@ static int ns_child(void *args) {
 
 	syslog(LOG_DEBUG, "cmd: %s\n", jail->init_cmd);
 	syslog(LOG_DEBUG, "argv[0]: %s\n", jail->init_args[0]);
-	syslog(LOG_DEBUG, "lofasz");
 
 	if (execvp(jail->init_cmd, jail->init_args) == -1) {
 		syslog(LOG_ERR, "Error during executing the program: %s", strerror(errno));
@@ -649,9 +699,10 @@ int ns_start_jail(ns_user_opts_t *opts) {
 	ns_jail_t *jail = ns_lookup_jail(config, config->opts->selection);
 
 	if (jail == NULL) {
-		syslog(LOG_ERR, "Couldn't find jail: %s\n", config->opts->selection);
+		syslog(LOG_ERR, "Couldn't find jail: %s", config->opts->selection);
 		return -1;
 	}
+
 
 	if (ns_enter_env(config, jail) == NS_ERROR) {
 		syslog(LOG_ERR, "Couldn't enter jail environment");
@@ -660,7 +711,6 @@ int ns_start_jail(ns_user_opts_t *opts) {
 
 	ns_free_config(config);
 
-	syslog(LOG_INFO, "Jail started");
 	return 0;
 }
 
@@ -698,10 +748,10 @@ int ns_show_help(ns_user_opts_t *opts) {
 	printf("      -f <config>       Load configuration from <config> instead of %s\n", NS_DEFAULT_CONFIG_PATH);
 	printf("\n  Available actions are the following:\n");
 	printf("      start             Start a jail\n");
-	printf("      stop              Stop a jail\n");
-	printf("      info              Display run-time information about a jail\n");
-	printf("      kill              Forcefully terminate a jail\n");
-	printf("      exec              Execute a command within a jail\n");
+	printf("      stop              Stop a jail (not implemented yet)\n");
+	printf("      info              Display run-time information about a jail (not implemented yet)\n");
+	printf("      kill              Forcefully terminate a jail (not implemented yet)\n");
+	printf("      exec              Execute a command within a jail (not implemented yet)\n");
 	return 0;
 }
 
