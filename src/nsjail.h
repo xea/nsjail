@@ -4,6 +4,7 @@
 #define _GNU_SOURCE
 
 #include <grp.h>
+#include <pwd.h>
 #include <time.h>
 #include <errno.h>
 #include <fcntl.h>

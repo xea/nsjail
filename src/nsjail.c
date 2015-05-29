@@ -523,22 +523,6 @@ int ns_setup_jail_network(ns_conf_t *config, ns_jail_t *jail) {
 	}
 
 
-	/*
-	if (snprintf(fmt_setup_jail_if, strlen(fmt_setup_jail_if), "ifconfig rveth0 %s up", jail->network->address) != -1) {
-		system(fmt_setup_jail_if);
-	} else {
-		syslog(LOG_ERR, "Couldn't bring virtual guest ethernet interface up: %s", strerror(errno));
-		return -1;
-	}
-
-	if (snprintf(fmt_setup_jail_gw, strlen(fmt_setup_jail_gw), "route add default gw %s", jail->network->gateway) != -1) {
-		system(fmt_setup_jail_gw);
-	} else {
-		syslog(LOG_ERR, "Couldn't add default gateway: %s", strerror(errno));
-		return -1;
-	}
-	*/
-
 	free(cmdbuf);
 
 	return retval;
@@ -649,6 +633,15 @@ static int ns_child(void *args) {
 			return -1;
 		}
 	}
+
+	// setup group memberships
+	struct passwd *pwd = getpwuid(jail->init_uid);
+
+	if (pwd != NULL) {
+		printf("%s\n", pwd->pw_name);
+		initgroups(pwd->pw_name, jail->init_gid);
+	}
+
 
 	syslog(LOG_DEBUG, "cmd: %s\n", jail->init_cmd);
 	syslog(LOG_DEBUG, "argv[0]: %s\n", jail->init_args[0]);
